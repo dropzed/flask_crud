@@ -12,3 +12,4 @@ env.bak/
 venv.bak/
 instance/
 .DS_Store
+.env

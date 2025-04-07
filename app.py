@@ -3,85 +3,90 @@ from flask_sqlalchemy import SQLAlchemy
 from flask_login import LoginManager, UserMixin, login_user, logout_user, login_required, current_user
 from werkzeug.security import generate_password_hash, check_password_hash
 from flask_wtf import FlaskForm
-from wtforms import StringField, PasswordField, SubmitField, validators
-from wtforms.validators import DataRequired, Length, ValidationError, EqualTo
-from urllib.parse import urlparse, urljoin
+from wtforms import StringField, PasswordField, SubmitField, TextAreaField
+from wtforms.validators import DataRequired, Length, EqualTo
+from datetime import datetime
+from dotenv import load_dotenv
+import os
 
+load_dotenv()
 
 app = Flask(__name__)
-app.secret_key = 'your_secret_key_here'
 
-# Конфигурация MySQL (остаётся как в предыдущей части)
-app.config['SQLALCHEMY_DATABASE_URI'] = 'mysql+pymysql://root:password@localhost/flask_db7'
+
+# Конфиг БД
+app.config['SECRET_KEY'] = os.getenv('SECRET_KEY')
+app.config['DEBUG'] = os.getenv('DEBUG') == 'True'
+app.config['SQLALCHEMY_DATABASE_URI'] = os.getenv('DATABASE_URL')
+app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
+
 db = SQLAlchemy(app)
 
-# Инициализация Flask-Login
+# flask login
 login_manager = LoginManager(app)
 login_manager.login_view = 'login'
 
 
-# Модель пользователя с наследованием UserMixin
+# user model
 class User(UserMixin, db.Model):
     id = db.Column(db.Integer, primary_key=True)
     username = db.Column(db.String(20), unique=True, nullable=False)
-    password = db.Column(db.String(60), nullable=False)
+    password = db.Column(db.String(255), nullable=False)
+    posts = db.relationship('Post', backref='author', lazy=True)
 
 
-# Загрузчик пользователя (обязателен для Flask-Login)
-@login_manager.user_loader
-def load_user(user_id):
-    return User.query.get(int(user_id))
+# post model
+class Post(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    content = db.Column(db.Text, nullable=False)
+    date_posted = db.Column(db.DateTime, nullable=False, default=datetime.utcnow)
+    user_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=False)
 
 
-# Форма регистрации
+# form of reg
 class RegistrationForm(FlaskForm):
-    username = StringField('Username', validators=[
-        DataRequired(),
-        Length(min=4, max=20)
-    ])
-    password = PasswordField('Password', validators=[
-        DataRequired(),
-        Length(min=6)
-    ])
-    confirm_password = PasswordField('Confirm Password', validators=[  # Фикс здесь
-        DataRequired(),
-        EqualTo('password', message='Passwords must match')
-    ])  # Закрывающая скобка была пропущена
+    username = StringField('Username', validators=[DataRequired(), Length(min=4, max=20)])
+    password = PasswordField('Password', validators=[DataRequired(), Length(min=6)])
+    confirm_password = PasswordField('Confirm Password',
+                                     validators=[DataRequired(), EqualTo('password')])
     submit = SubmitField('Sign Up')
 
 
-# Форма авторизации
+# form of log
 class LoginForm(FlaskForm):
     username = StringField('Username', validators=[DataRequired()])
     password = PasswordField('Password', validators=[DataRequired()])
     submit = SubmitField('Login')
 
-confirm_password = PasswordField('Confirm Password', validators=[
-        DataRequired(),
-        validators.EqualTo('password', message='Passwords must match')
-    ])
 
-# Проверки
-@app.errorhandler(404)
-def page_not_found(e):
-    return render_template('404.html'), 404
-
-@app.errorhandler(500)
-def internal_error(e):
-    db.session.rollback()
-    return render_template('500.html'), 500
-
-def is_safe_url(target):
-    ref_url = urlparse(request.host_url)
-    test_url = urlparse(urljoin(request.host_url, target))
-    return test_url.scheme in ('http', 'https') and ref_url.netloc == test_url.netloc
+# form for create post
+class PostForm(FlaskForm):
+    content = TextAreaField('Content', validators=[DataRequired()])
+    submit = SubmitField('Post')
 
 
-# Маршруты
+# user loader (id)
+@login_manager.user_loader
+def load_user(user_id):
+    return User.query.get(int(user_id))
+
+
+# create table
+with app.app_context():
+    db.create_all()
+
+
+# api
+@app.route('/')
+def home():
+    posts = Post.query.order_by(Post.date_posted.desc()).all()
+    return render_template('home.html', posts=posts)
+
+
 @app.route('/register', methods=['GET', 'POST'])
 def register():
     if current_user.is_authenticated:
-        return redirect(url_for('index'))
+        return redirect(url_for('home'))
 
     form = RegistrationForm()
     if form.validate_on_submit():
@@ -89,7 +94,7 @@ def register():
         user = User(username=form.username.data, password=hashed_password)
         db.session.add(user)
         db.session.commit()
-        flash('Account created!', 'success')
+        flash('account created', 'success')
         return redirect(url_for('login'))
 
     return render_template('register.html', form=form)
@@ -98,7 +103,7 @@ def register():
 @app.route('/login', methods=['GET', 'POST'])
 def login():
     if current_user.is_authenticated:
-        return redirect(url_for('index'))
+        return redirect(url_for('home'))
 
     form = LoginForm()
     if form.validate_on_submit():
@@ -106,39 +111,34 @@ def login():
         if user and check_password_hash(user.password, form.password.data):
             login_user(user)
             next_page = request.args.get('next')
-            if not is_safe_url(next_page):
-                next_page = None
-            return redirect(next_page) if next_page else redirect(url_for('profile'))
+            return redirect(next_page) if next_page else redirect(url_for('home'))
         else:
-            flash('Login failed. Check username and password', 'danger')
+            flash('login unsuccessful', 'danger')
 
     return render_template('login.html', form=form)
 
 
 @app.route('/logout')
-@login_required
 def logout():
     logout_user()
-    return redirect(url_for('index'))
+    return redirect(url_for('home'))
 
 
-@app.route('/profile')
+@app.route('/post/new', methods=['GET', 'POST'])
 @login_required
-def profile():
-    return render_template('profile.html', user=current_user)
+def new_post():
+    form = PostForm()
+    if form.validate_on_submit():
+        post = Post(content=form.content.data, author=current_user)
+        db.session.add(post)
+        db.session.commit()
+        flash('your post has been created', 'success')
+        return redirect(url_for('home'))
+    return render_template('create_post.html', form=form)
 
 
-# Остальные маршруты остаются без изменений
-# Создаём таблицы при первом запросе
-# Вместо этого используйте явное создание таблиц в контексте приложения:
-with app.app_context():
-    db.create_all()
-
-@app.route('/')
-def index():
-    return render_template('index.html')
-
+# create flask
 if __name__ == '__main__':
     with app.app_context():
         db.create_all()
-    app.run(debug=True)
+    app.run(debug=True, host=os.getenv("FLASK_RUN_HOST", "127.0.0.1"), port=int(os.getenv("FLASK_RUN_PORT", 5000)))
