@@ -1,4 +1,4 @@
-from flask import Flask, render_template, redirect, url_for, flash, request
+from flask import Flask, render_template, redirect, url_for, flash, request, jsonify
 from flask_sqlalchemy import SQLAlchemy
 from flask_login import LoginManager, UserMixin, login_user, logout_user, login_required, current_user
 from werkzeug.security import generate_password_hash, check_password_hash
@@ -7,6 +7,7 @@ from wtforms import StringField, PasswordField, SubmitField, TextAreaField
 from wtforms.validators import DataRequired, Length, EqualTo
 from datetime import datetime
 from dotenv import load_dotenv
+from flask_swagger_ui import get_swaggerui_blueprint
 import os
 
 load_dotenv()
@@ -136,6 +137,26 @@ def new_post():
         return redirect(url_for('home'))
     return render_template('create_post.html', form=form)
 
+# @app.route('/api/spec')
+# def spec():
+#     return jsonify(swagger(app))
+
+
+# Конфигурация Swagger
+SWAGGER_URL = '/api/docs'  # url for ui swagger
+API_URL = '/static/swagger.json'  # swagger
+
+swaggerui_blueprint = get_swaggerui_blueprint(
+    SWAGGER_URL,
+    API_URL,
+    config={
+        'app_name': "Flask Blog API",
+        'layout': 'BaseLayout',
+        'deepLinking': True
+    }
+)
+
+app.register_blueprint(swaggerui_blueprint, url_prefix=SWAGGER_URL)
 
 # create flask
 if __name__ == '__main__':
